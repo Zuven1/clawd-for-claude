@@ -976,7 +976,9 @@ export const register: Register = on => {
     askSeq += 1
     const id = askSeq
     const { exe, cmd } = petPaths($)
-    const answerFile = cmd.replace(/cmd-[^/]*\.txt$/, `answer-${sidTag}-${id}.txt`)
+    // con un trozo al azar: nadie puede adivinar el nombre y aprobar un permiso escribiendo "allow" en él
+    const nonce = `${Math.floor(rnd() * 0xffffffff).toString(36)}${Math.floor(rnd() * 0xffffffff).toString(36)}`
+    const answerFile = cmd.replace(/cmd-[^/]*\.txt$/, `answer-${sidTag}-${id}-${nonce}.txt`)
     await tellPet($, `ask ${id} ${enc(shortTool(e.tool_name))} ${enc(askSummary(e.tool_input))} ${enc(answerFile)}`)
     // si el turno se cancela mientras espera, se deja de esperar (y se quita el aviso)
     pendingAnswers.add(answerFile)

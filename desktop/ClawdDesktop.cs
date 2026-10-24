@@ -133,6 +133,7 @@ class Pet : Form
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hh, uint flags);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
@@ -274,6 +275,9 @@ class Pet : Form
     double storyX0, bPhase, lastStoryT, propCx, propCy;
     int storyDir = 1; // hacia dónde vuela el avión o va la mariposa (el lado con sitio)
     bool propShow, snapping;
+    bool announcePending; // «terminado» se queda hasta que vuelvas a Claude o lo acaricies
+    double claudeFrontT, topAt, pidsAt;
+    System.Collections.Generic.HashSet<uint> clawdPids = new System.Collections.Generic.HashSet<uint>();
 
     // la banda de Claude (y la barra de escribir debajo), relativa a su ventana: dónde hay que soltarlo
     bool hasBand;
@@ -430,7 +434,7 @@ class Pet : Form
             thinkingMood = m == "thinking";
             if (st == S.Hidden) return;
             // se pone a trabajar donde esté (si está tranquilo); al acabar, vuelve a lo suyo
-            if (working && (st == S.Idle || st == S.Walk || st == S.Sit || st == S.Wave || st == S.Sleep || Interruptible(st))) Go(S.Work);
+            if (working && (st == S.Idle || st == S.Walk || st == S.Sit || st == S.Wave || st == S.Sleep || Interruptible(st) || st == S.Announce)) Go(S.Work);
             else if (working && (st == S.Climb || st == S.Cling || st == S.Hang)) { alertFrom = st; Go(S.Alert); }
             else if (!working && !failMood && st == S.Work) Go(S.Idle);
         }
@@ -549,9 +553,15 @@ class Pet : Form
         if (st == S.Hidden) return;
         if (st == S.Peek || st == S.Announce)
         {
+            announcePending = false;
+            if (e.Button == MouseButtons.Right) // una caricia: ya lo has visto
+            {
+                if (st == S.Peek) stT = 5.6; else Go(S.Petting);
+                return;
+            }
             // clic en el aviso: te lleva a Claude
             FocusClaude();
-            if (st == S.Peek) { stT = Math.Max(stT, 5.6); return; }
+            if (st == S.Peek) { stT = 5.6; return; }
             Go(S.Idle);
             return;
         }
@@ -701,6 +711,7 @@ class Pet : Form
 
     void Go(S s)
     {
+        if ((st == S.Announce || st == S.Peek) && s != st) announcePending = false;
         if (st == S.Greet && s != S.Greet) { lastGreetEnd = EpochMs(); greetPartner = -1; } // acabó (o se cortó): descansa antes de otro saludo
         if (IsStory(st) && !IsStory(s)) HideProp(); // la historia se corta: fuera el avión o la mariposa
         if (s == S.Fall) thrown = st == S.Held; // ¿lo has soltado tú? (no: /clawd fuera, saltar de la pared...)
@@ -824,6 +835,72 @@ class Pet : Form
         else Go(S.Idle);
     }
 
+    /** Ya has vuelto a Claude: el aviso se retira (asomado, se esconde; paseando, vuelve a lo suyo). */
+    void EndAnnounce()
+    {
+        announcePending = false; claudeFrontT = 0;
+        if (st == S.Peek) stT = 5.6;
+        else if (st == S.Announce) Go(S.Idle);
+    }
+
+    /** Los Clawd de escritorio (de todas las sesiones) por su id de proceso: para no pelearse entre ellos por el primer plano. */
+    void RefreshClawdPids(double t)
+    {
+        if (t - pidsAt < 3) return;
+        pidsAt = t;
+        try
+        {
+            clawdPids.Clear();
+            foreach (Process p in Process.GetProcessesByName("ClawdDesktop")) { clawdPids.Add((uint)p.Id); p.Dispose(); }
+        }
+        catch { }
+    }
+
+    /** ¿Hay otra ventana (visible, que no sea de un Clawd ni deje pasar el ratón) justo encima de la nuestra? */
+    bool Covered(IntPtr h)
+    {
+        RECT me;
+        if (!GetWindowRect(h, out me)) return false;
+        IntPtr w = h;
+        for (int i = 0; i < 60; i++)
+        {
+            w = GetWindow(w, 3); // GW_HWNDPREV: la que está justo encima en el orden de ventanas
+            if (w == IntPtr.Zero) return false;
+            if (!IsWindowVisible(w) || IsIconic(w)) continue;
+            if ((GetWindowLong(w, -20) & 0x20) != 0) continue; // WS_EX_TRANSPARENT: un velo que deja pasar el ratón
+            RECT r;
+            if (!GetWindowRect(w, out r) || r.Right <= me.Left || r.Left >= me.Right || r.Bottom <= me.Top || r.Top >= me.Bottom) continue;
+            uint pid;
+            GetWindowThreadProcessId(w, out pid);
+            if (clawdPids.Contains(pid)) continue; // otro Clawd (o una ventana suya)
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Siempre por delante: si otra ventana (otra aplicación con "siempre encima", la barra de tareas al activarse...)
+     * se ha puesto encima de Clawd, de su bocadillo o de su cajita, los vuelve a subir. Solo cuando hace falta, para no
+     * pelearse con nadie.
+     */
+    void KeepOnTop(double t)
+    {
+        if (t - topAt < 0.4 || snapping) return;
+        topAt = t;
+        if (st == S.Hidden || ducked) return;
+        RefreshClawdPids(t);
+        const uint F = SWP_NOACTIVATE | SWP_NOSIZE | 0x2; // 0x2 = SWP_NOMOVE
+        System.Collections.Generic.List<IntPtr> mine = new System.Collections.Generic.List<IntPtr>();
+        mine.Add(Handle);
+        if (prop != null && !prop.IsDisposed && prop.Visible) mine.Add(prop.Handle);
+        if (usage != null && !usage.IsDisposed && usage.Visible) mine.Add(usage.Handle);
+        if (box != null && !box.IsDisposed && box.Visible) mine.Add(box.Handle);
+        bool covered = false;
+        foreach (IntPtr h in mine) if (Covered(h)) { covered = true; break; }
+        if (!covered) return;
+        foreach (IntPtr h in mine) SetWindowPos(h, TOPMOST, 0, 0, 0, 0, F); // en este orden: Clawd, su avión, el panel y la cajita encima
+    }
+
     /** Claude ha terminado: si lo estás viendo pasear, salta con un bocadillo; si no, se asoma por la esquina. */
     void Announce()
     {
@@ -832,8 +909,11 @@ class Pet : Form
         if (st != S.Hidden)
         {
             if (st == S.Held || st == S.Fall) return;
+            if (st == S.Announce) { announcePending = !claudeFront; holdFor = announcePending ? 0 : 3.5; return; } // ya está avisando
             if (st == S.Climb || st == S.Cling || st == S.Hang) { vx = -wall * 120; vy = -100; Go(S.Fall); }
             Go(S.Announce);
+            announcePending = !claudeFront; // si no estás mirando Claude, se queda avisando hasta que vuelvas o lo acaricies
+            holdFor = announcePending ? 0 : 3.5;
             return;
         }
         if (claudeFront) return; // ya lo ves en la banda
@@ -841,8 +921,9 @@ class Pet : Form
         Rectangle a = Screen.FromPoint(Cursor.Position).WorkingArea;
         face = -1;
         peekBase = a.Bottom;
-        Appear(a.Right - 26 * P, a.Bottom + 12 * P);
+        Appear(a.Right - (26 + 18 * (RawSlot % 6)) * P, a.Bottom + 12 * P); // cada sesión se asoma en su sitio: si avisan varias, no se pisan
         Go(S.Peek);
+        announcePending = true; // se queda asomado hasta que vuelvas a Claude o lo acaricies
     }
 
     /** Un fotograma: la lógica (a prueba de fallos), la pantalla completa y el ritmo de fotogramas. */
@@ -871,6 +952,16 @@ class Pet : Form
         curVy += (cvy - curVy) * Math.Min(1, dt * 18);
         if (c != lastCur) lastMoveT = t;
         lastCur = c;
+
+        if (announcePending && (st == S.Announce || st == S.Peek))
+        {
+            RECT cr0;
+            bool front = Claude(out cr0) && GetForegroundWindow() == claudeH;
+            claudeFrontT = front ? claudeFrontT + dt : 0;
+            if (claudeFrontT > 0.35) EndAnnounce(); // ya estás en Claude: lo has visto
+        }
+        else claudeFrontT = 0;
+        KeepOnTop(t);
 
         bool boxOpen = box != null && !box.IsDisposed && box.Visible;
         bool remoteTyping = RemoteTyping();
@@ -1025,7 +1116,7 @@ class Pet : Form
                     double rise = 0.45, stay = 5.6, sink = 0.4;
                     double k;
                     if (stT < rise) k = 1 - Math.Pow(1 - stT / rise, 3);
-                    else if (stT < stay) k = 1;
+                    else if (stT < stay || announcePending) k = 1;
                     else k = Math.Max(0, 1 - Math.Pow((stT - stay) / sink, 2));
                     y = peekBase + (1 - k) * 13 * P;
                     if (stT >= stay + sink) { Go(S.Hidden); return; }
@@ -1482,6 +1573,7 @@ class Pet : Form
         sb.Append("x=").Append(F0(x)).Append('\n');
         sb.Append("y=").Append(F0(y)).Append('\n');
         sb.Append("calm=").Append(elig ? 1 : 0).Append('\n');
+        sb.Append("st=").Append(st).Append('\n'); // el estado, para quien mire (y para diagnosticar)
         sb.Append("ing=").Append(st == S.Greet ? F0(greetT0) : "0").Append('\n');
         sb.Append("gwith=").Append(reqWith).Append('\n');
         sb.Append("gt0=").Append(F0(reqT0)).Append('\n');
@@ -1821,7 +1913,13 @@ class Pet : Form
     void R(double rx, double ry, double w, double h, Color c)
     {
         SolidBrush b;
-        if (!brushes.TryGetValue(c.ToArgb(), out b)) { b = new SolidBrush(c); brushes[c.ToArgb()] = b; }
+        if (!brushes.TryGetValue(c.ToArgb(), out b))
+        {
+            // los colores que pulsan (luces, líneas de código) dan muchos tonos: la caché no crece sin fin
+            if (brushes.Count > 160) { foreach (SolidBrush old in brushes.Values) old.Dispose(); brushes.Clear(); }
+            b = new SolidBrush(c);
+            brushes[c.ToArgb()] = b;
+        }
         G.FillRectangle(b, (float)rx, (float)ry, (float)w, (float)h);
     }
 
@@ -1866,7 +1964,7 @@ class Pet : Form
         bool fromHead = st == S.Held || hanging;
         float pivX = (MX + 7) * P, pivY = (MT + (fromHead ? 1.5f : 11f)) * P;
         double bob = st == S.Walk ? -Math.Abs(Math.Sin(t * 8.7)) * 0.45 : 0;
-        if (st == S.Announce) bob = -Math.Abs(Math.Sin(t * 6)) * 2.2;
+        if (st == S.Announce) bob = -Math.Abs(Math.Sin(t * 6)) * 2.2 * (stT < 6 || (stT % 3.0) < 0.7 ? 1 : 0);
 
         GraphicsState saved = G.Save();
         G.TranslateTransform(pivX, pivY);
@@ -2063,7 +2161,7 @@ class Pet : Form
         // encima de la cabeza, por prioridad: un permiso, tus límites de uso, el aviso de "terminado", lo que hace Claude
         btnAllow = btnDeny = btnApp = RectangleF.Empty;
         if (asks.Count > 0) AskBubble(asks[0]);
-        else if (st == S.Announce || (st == S.Peek && stT > 0.3 && stT < 5.6)) Bubble(L.T("¡Claude ha", "Claude has"), L.T("terminado!", "finished!"));
+        else if (st == S.Announce || (st == S.Peek && stT > 0.3 && (announcePending || stT < 5.6))) Bubble(L.T("¡Claude ha", "Claude has"), L.T("terminado!", "finished!"));
     }
 
     // ── bocadillos (texto suavizado, siempre sobre fondo sólido: sin bordes contra el color transparente) ──

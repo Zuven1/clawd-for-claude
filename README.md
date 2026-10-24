@@ -39,7 +39,7 @@ You will be asked to add the marketplace (answer `y`) and to pick a scope (user 
 - He walks along the bottom edge of your screen and on top of the Claude window, climbs the edges of the screen with his two little hands, and hangs from the top edge.
 - He shows what Claude is doing: laptop while working, book while searching the web.
 - When Claude asks for permission, he raises his hands with three buttons: **Allow**, **No** or **Claude** (opens the normal dialog in the app). If the command is too long to be shown in full, the first button becomes **Review** and opens the app's dialog instead, so you never approve something you have not read in full. If you do not answer within 3 minutes, the app's dialog is used.
-- When Claude finishes and you are not looking at it, he peeks up from the corner of your screen. Click the bubble to jump to Claude.
+- When Claude finishes and you are not looking at it, he peeks up from the corner of your screen (or, if he is out walking, jumps with a bubble) and **keeps saying so until you go back to the Claude window or pet him** (right-click); a left click on the bubble takes you to Claude. If you were already looking at Claude, the notice is brief. His windows always stay in front: if another window covers him he comes back on top.
 - **Double left click:** your usage limits (session and week) in a large window: used, remaining and when they reset. It grows when you point at it.
 - **Double right click:** a small box to write to Claude without opening the app (Enter sends, Esc closes). Clawd looks at what you type with curiosity.
 - Drop him on top of the prompt bar to put him back in.
@@ -129,7 +129,7 @@ Te preguntará si añades el marketplace (responde `y`) y el ámbito (el de usua
 - Camina por el borde inferior de tu pantalla y sobre la ventana de Claude, trepa por los bordes de la pantalla con sus dos manitas y se cuelga del borde de arriba.
 - Enseña lo que hace Claude: portátil mientras trabaja, libro mientras busca en internet.
 - Cuando Claude pide permiso, levanta las manitas con tres botones: **Permitir**, **No** o **Claude** (abre el diálogo normal de la app). Si el comando es demasiado largo para verse entero, el primer botón pasa a ser **Revisar** y abre el diálogo de la app, así nunca apruebas algo que no has leído completo. Si no contestas en 3 minutos, se usa el diálogo de la app.
-- Cuando Claude termina y no lo estás mirando, se asoma por la esquina de tu pantalla. Un clic en el bocadillo te lleva a Claude.
+- Cuando Claude termina y no lo estás mirando, se asoma por la esquina de tu pantalla (o, si está paseando, salta con un bocadillo) y **se queda avisando hasta que vuelvas a la ventana de Claude o lo acaricies** (clic derecho); un clic izquierdo en el bocadillo te lleva a Claude. Si ya estabas mirando Claude, el aviso es breve. Sus ventanas van siempre por delante: si otra lo tapa, vuelve a ponerse encima.
 - **Doble clic izquierdo:** tus límites de uso (sesión y semana) en una ventana grande: lo usado, lo que queda y cuándo se renuevan. Se agranda al acercar el ratón.
 - **Doble clic derecho:** una cajita para escribirle a Claude sin abrir la app (Intro envía, Esc cierra). Clawd mira con curiosidad lo que escribes.
 - Déjalo caer encima de la barra de escribir para volver a meterlo.
