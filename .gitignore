@@ -1,0 +1,13 @@
+# Se compila solo en cada ordenador (con el compilador de C# que trae Windows); no se sube el binario
+desktop/bin/
+
+# Registros de depuración y archivos del sistema o del editor
+*.log
+.DS_Store
+Thumbs.db
+*~
+
+# Los tipos de la API los escribe el motor de Claude Code
+.claude-plugin/types/
+
+node_modules/

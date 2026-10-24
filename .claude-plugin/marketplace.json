@@ -1,0 +1,12 @@
+{
+  "name": "clawd-for-claude",
+  "owner": { "name": "Lumbita" },
+  "description": "Clawd, a living pixel-art mascot for Claude Code · Una mascota viva en pixel art para Claude Code",
+  "plugins": [
+    {
+      "name": "clawd-band",
+      "source": "./",
+      "description": "Clawd lives above the prompt bar and around your desktop: shows what Claude is doing, lets you approve permissions, write to Claude and check your usage limits without opening the app, and tells you when Claude is done. · Clawd vive sobre la barra de escribir y por tu escritorio."
+    }
+  ]
+}
