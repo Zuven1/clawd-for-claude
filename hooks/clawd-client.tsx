@@ -10,7 +10,7 @@ import type { ClientModule } from 'claude-code'
 // que se dibujan.
 
 type Mood = 'idle' | 'thinking' | 'tool' | 'ok' | 'fail' | 'done'
-type Props = { mood: Mood; label: string; rows: number }
+type Props = { mood: Mood; label: string; rows: number; slot?: number }
 type Mode =
   | 'idle' | 'walk' | 'wave' | 'crouch' | 'jump' | 'sleep' | 'yawn' | 'drag'
   | 'fall' | 'land' | 'pet' | 'dizzy' | 'shake' | 'cheer'
@@ -74,6 +74,18 @@ const C = {
   dust: '#e8d9c8',
 }
 const CONFETTI = [C.yellow, C.pink, C.blue, C.green, C.white]
+
+// El color de cada sesión (los mismos que en scene.ts: naranja, azul, amarillo, blanco, verde, rosa, morado, turquesa)
+const SKIN: [string, string][] = [
+  ['#D97757', '#B85C3E'], ['#5B9BE6', '#3E72B8'], ['#E9C24B', '#BE9A2C'], ['#F1EFEA', '#C6C2BA'],
+  ['#63C48F', '#3F9A6B'], ['#E88BB0', '#BC6489'], ['#A184DE', '#7B5EB8'], ['#4FC3C9', '#2F9AA0'],
+]
+/** El color de una celda con el de la sesión (el cuerpo y su sombra cambian; lo demás, no). */
+const skin = (c: string | undefined, slot: number): string | undefined => {
+  if (c === undefined) return c
+  const k = SKIN[((Math.floor(slot) % SKIN.length) + SKIN.length) % SKIN.length]
+  return c === C.body ? k[0] : c === C.shade ? k[1] : c
+}
 
 type Grid = (string | null)[][]
 
@@ -569,7 +581,7 @@ const Clawd: ClientModule<Props, Sim> = (props, surface) => {
       <Box key={String(r)}>
         {offset > 0 ? <Text mono>{NBSP.repeat(offset)}</Text> : null}
         {runs.map((q, i) => (
-          <Text key={String(i)} mono color={q.fg} backgroundColor={q.bg}>
+          <Text key={String(i)} mono color={skin(q.fg, props.slot ?? 0)} backgroundColor={skin(q.bg, props.slot ?? 0)}>
             {q.ch.repeat(q.n)}
           </Text>
         ))}

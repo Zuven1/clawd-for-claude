@@ -11,16 +11,16 @@ A living pixel-art mascot for Claude Code. Clawd walks above your prompt bar, re
 In a terminal session:
 
 ```
-/plugin install clawd-band --marketplace Zuven1/clawd-for-claude
+/plugin install clawd-band --marketplace OWNER/clawd-for-claude
 ```
 
 From a shell:
 
 ```
-claude plugin install clawd-band --marketplace Zuven1/clawd-for-claude
+claude plugin install clawd-band --marketplace OWNER/clawd-for-claude
 ```
 
-In the desktop app, where `/plugin` does not run: click **+** next to the prompt box → **Plugins** → **Add marketplace** with `Zuven1/clawd-for-claude` → **Add plugin**.
+In the desktop app, where `/plugin` does not run: click **+** next to the prompt box → **Plugins** → **Add marketplace** with `OWNER/clawd-for-claude` → **Add plugin**.
 
 You will be asked to add the marketplace (answer `y`) and to pick a scope (user scope makes Clawd appear in every session). If the repository is private, you need to be able to read it on GitHub and have a git credential for github.com on your machine.
 
@@ -29,6 +29,7 @@ You will be asked to add the marketplace (answer `y`) and to pick a scope (user 
 **Above the prompt bar** (Claude desktop app; a simpler version in the terminal):
 
 - Walks, waves, jumps, sits on the edge of the bar, stretches, sleeps when nothing happens, sometimes chases a firefly or sneezes. Now and then he tells a little story: he plays with a paper plane (throws it and watches it glide), studies a map (turns it round: "where am I?"), or puts on headphones and dances to the beat. On the desktop he can also spot a butterfly, chase it, stop, hold out his hand (the little square) and let it land softly.
+- **Several sessions at once:** every open Claude Code session gets its own Clawd colour so you can tell them apart: the first one is orange, then blue, yellow, white, green, pink, purple and turquoise. The colour is also his band, his tiny spinner Clawd, his buttons and his speech bubbles. When a session closes its colour is freed, so the next one you open is orange again if it was the first. When two Clawds cross paths on the desktop and neither is working, they greet each other (a fist bump or a high five, picked at random), then go their own way.
 - His eyes follow your mouse and, while you type, follow your text cursor. He tilts a little toward the side you are writing on.
 - Thinking: types on his laptop with three dots over his head. Searching the web: reads a book. Tool call: his laptop, with little stars each time a tool finishes. Failure: he shakes. Done: he celebrates (only for turns you asked for, not for background tasks).
 - You can grab him (hold the left button), pet him (right click) or poke him (a quick left click).
@@ -100,16 +101,16 @@ Una mascota viva en pixel art para Claude Code. Clawd camina sobre tu barra de e
 En una sesión de terminal:
 
 ```
-/plugin install clawd-band --marketplace Zuven1/clawd-for-claude
+/plugin install clawd-band --marketplace OWNER/clawd-for-claude
 ```
 
 Desde una consola:
 
 ```
-claude plugin install clawd-band --marketplace Zuven1/clawd-for-claude
+claude plugin install clawd-band --marketplace OWNER/clawd-for-claude
 ```
 
-En la app de escritorio, donde `/plugin` no funciona: pulsa **+** junto a la caja de mensaje → **Plugins** → **Añadir marketplace** con `Zuven1/clawd-for-claude` → **Añadir plugin**.
+En la app de escritorio, donde `/plugin` no funciona: pulsa **+** junto a la caja de mensaje → **Plugins** → **Añadir marketplace** con `OWNER/clawd-for-claude` → **Añadir plugin**.
 
 Te preguntará si añades el marketplace (responde `y`) y el ámbito (el de usuario hace que Clawd salga en todas tus sesiones). Si el repositorio es privado, tienes que poder leerlo en GitHub y tener una credencial de git para github.com en tu equipo.
 
@@ -118,6 +119,7 @@ Te preguntará si añades el marketplace (responde `y`) y el ámbito (el de usua
 **Sobre la barra de escribir** (app de escritorio de Claude; una versión más sencilla en la terminal):
 
 - Camina, saluda, salta, se sienta en el borde de la barra, se estira, se duerme si no pasa nada, a veces persigue una luciérnaga o estornuda. De vez en cuando cuenta una pequeña historia: juega con un avión de papel (lo lanza y lo ve planear), mira un mapa (lo gira: «¿dónde estoy?») o se pone unos cascos y baila al ritmo. En el escritorio, además, puede ver una mariposa, perseguirla, pararse, extender la mano (el cuadradito) y dejar que se pose suavemente.
+- **Varias sesiones a la vez:** cada sesión de Claude Code abierta tiene su Clawd de un color para distinguirlas: la primera es naranja, luego azul, amarilla, blanca, verde, rosa, morada y turquesa. El color es también el de su banda, su Clawd diminuto, sus botones y sus bocadillos. Al cerrar una sesión, su color queda libre: la siguiente que abras vuelve a ser naranja si era la primera. Si dos Clawd se cruzan por el escritorio y ninguno está trabajando, se saludan (un choque de puños o chocan esos cinco, al azar) y cada uno sigue a lo suyo.
 - Sus ojos siguen tu ratón y, mientras escribes, tu cursor de texto. Se inclina un poco hacia el lado por donde escribes.
 - Pensando: teclea en su portátil con tres puntitos encima. Buscando en internet: lee un libro. Herramienta: su portátil, con estrellitas cada vez que termina una. Fallo: se sacude. Terminado: celebra (solo en los turnos que pediste tú, no en tareas en segundo plano).
 - Puedes agarrarlo (mantén el botón izquierdo), acariciarlo (clic derecho) o sobresaltarlo (clic izquierdo rápido).

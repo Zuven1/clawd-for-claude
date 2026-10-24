@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { Mood, Scene } from '../types'
-import { FLOOR, HC, SEND_MS, SPH, SPW, U, dockSvg, drag, exceeds, fall, isUserTurn, labelFor, miniSvg, moodScene, nextScene, poke, posAt, sceneSvg, send, still, worldWidth } from './scene'
+import { FLOOR, HC, SEND_MS, SPH, SPW, U, dockSvg, drag, exceeds, fall, isUserTurn, labelFor, miniSvg, moodScene, nextScene, poke, posAt, sceneSvg, send, still, tint, worldWidth } from './scene'
+import { SLOT_BEAT_MS, beatSlot, claimSlot, releaseSlot } from './slots'
 import { t } from './i18n'
 
 // Altura de la banda en la terminal (filas de texto); en escritorio manda el lienzo (HC px).
@@ -28,8 +29,15 @@ const bandH = atom({ plugin: 'clawd-band', key: 'bandH' } as const, HC)
 const DOCK_H = 26
 const OUT_DELAY_MS = 120 // el de escritorio aparece un instante después de que desaparezca el de la banda
 const near = atom({ plugin: 'clawd-band', key: 'near' } as const, false)
+const slotAtom = atom({ plugin: 'clawd-band', key: 'slot' } as const, 0) // el hueco de esta sesión: su color
 
 // ── estado que no se dibuja (se reinicia al recargar el mod) ────────────────
+
+// ── varias sesiones a la vez: cada una con su hueco (color), sus archivos y su propia suerte ──
+let sid = '' // id de la sesión
+let sidTag = 'x' // trozo del id para los nombres de archivo: las órdenes y las respuestas son de cada sesión
+let regDir = '' // carpeta del registro de sesiones ('' = sin registro: siempre naranja)
+let mySlot = 0
 
 // Pon DEBUG a true para volver a registrar medidas y eventos de ratón en este archivo.
 const DEBUG = false
@@ -279,7 +287,7 @@ let outAck = true // el de escritorio confirmó que ha salido ("out")
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const petPaths = ($: any) => {
   const dir = `${String($.plugin.root).replace(/\\/g, '/')}/desktop`
-  return { src: `${dir}/ClawdDesktop.cs`, exe: `${dir}/bin/ClawdDesktop.exe`, cmd: `${dir}/bin/cmd.txt` }
+  return { src: `${dir}/ClawdDesktop.cs`, exe: `${dir}/bin/ClawdDesktop.exe`, cmd: `${dir}/bin/cmd-${sidTag}.txt` }
 }
 
 /** Compila el ejecutable si falta o si el código es más nuevo (una vez; unos segundos). */
@@ -326,7 +334,7 @@ async function ensurePet($: any) {
   void (async () => {
     let buf = ''
     try {
-      for await (const chunk of $.process.spawn({ argv: [exe, cmd] })) {
+      for await (const chunk of $.process.spawn({ argv: [exe, cmd, String(mySlot), regDir] })) {
         buf += String(chunk.text)
         let nl = buf.indexOf('\n')
         while (nl >= 0) {
@@ -520,13 +528,13 @@ async function comeHome($: any, f: number) {
 // ── los dibujos, reutilizados mientras no cambien ───────────────────────────
 
 /** Clawd en la banda: un SVG nuevo solo si cambia la escena, el ánimo, la etiqueta o el ancho. */
-function sceneOf(sc: Scene, m: Mood, label: string, wc: number, now: number): string {
-  const key = JSON.stringify([sc, m, label, wc])
+function sceneOf(sc: Scene, m: Mood, label: string, wc: number, now: number, slot: number): string {
+  const key = JSON.stringify([sc, m, label, wc, slot])
   const fresh = now - sceneDrawnAt < REUSE_MS
   sceneDrawnAt = now
   if (key !== sceneKey || !fresh) {
     sceneKey = key
-    sceneSrc = sceneSvg(sc, m, label, wc, now)
+    sceneSrc = tint(sceneSvg(sc, m, label, wc, now), slot)
   }
   return sceneSrc
 }
@@ -536,23 +544,24 @@ function sceneOf(sc: Scene, m: Mood, label: string, wc: number, now: number): st
 async function dockOf($: any, wc: number): Promise<string> {
   const nr = await read($, near)
   const at = await read($, dockAt)
-  const key = JSON.stringify([wc, nr, at])
+  const slot = await read($, slotAtom)
+  const key = JSON.stringify([wc, nr, at, slot])
   const now = await $.clock.now()
   const fresh = now - dockDrawnAt < REUSE_MS
   dockDrawnAt = now
   if (key !== dockKey || !fresh) {
     dockKey = key
-    dockSrc = dockSvg(wc, nr, (now - at) / 1000)
+    dockSrc = tint(dockSvg(wc, nr, (now - at) / 1000), slot)
   }
   return dockSrc
 }
 
 /** El Clawd diminuto del spinner: un SVG nuevo solo si cambia lo que hace. */
-function miniOf(mode: string, web: boolean, elapsedS: number): string {
-  const key = mode + (web ? ':web' : '')
+function miniOf(mode: string, web: boolean, elapsedS: number, slot: number): string {
+  const key = mode + (web ? ':web' : '') + ':' + slot
   if (key !== miniKey) {
     miniKey = key
-    miniSrc = miniSvg(mode, 18, elapsedS, web)
+    miniSrc = tint(miniSvg(mode, 18, elapsedS, web), slot)
   }
   return miniSrc
 }
@@ -729,6 +738,54 @@ async function fitScene($: any) {
   await setScene($, still('idle', clamp(posAt(sc, now).x, 0, maxX), FLOOR, now, sc.face, Math.floor(rnd() * 1e6)), 900)
 }
 
+/** Una semilla distinta para cada sesión: dos Clawd abiertos a la vez no deben pasear idénticos. */
+function seedFrom(text: string, now: number): number {
+  let h = 2166136261
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619)
+  return ((h ^ Math.imul(now & 0xffffff, 2654435761)) >>> 0) || 1
+}
+
+/** Se da de alta en el registro de sesiones: toma el hueco libre más bajo (el 0 es el naranja de siempre). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function joinRegistry($: any) {
+  const now = await $.clock.now()
+  try {
+    sid = String(await $.session.id())
+  } catch {
+    sid = ''
+  }
+  sidTag = sid.replace(/[^a-zA-Z0-9]/g, '').slice(0, 10) || String(now % 1_000_000_007)
+  seed = seedFrom(sid + sidTag, now)
+  try {
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+    regDir = home ? `${String(home).replace(/\\/g, '/')}/.claude/clawd-band` : ''
+  } catch {
+    regDir = ''
+  }
+  try {
+    mySlot = regDir ? await claimSlot($, regDir, sid || sidTag) : 0
+  } catch {
+    mySlot = 0 // sin registro (no se puede escribir): naranja, como siempre
+  }
+  await update($, slotAtom, () => mySlot)
+}
+
+/** Renueva el hueco; si otra sesión se lo quedó (el PC durmió), toma otro y avisa al Clawd de escritorio del cambio. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function slotBeat($: any) {
+  if (!regDir) return
+  try {
+    const n = await beatSlot($, regDir, sid || sidTag, mySlot)
+    if (n !== mySlot) {
+      mySlot = n
+      await update($, slotAtom, () => n)
+      if (petReady) await tellPet($, `color ${n}`)
+    }
+  } catch {
+    // el registro no es imprescindible
+  }
+}
+
 // Si la cadena de decisiones se parase (p. ej. tras un error), la retoma.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function watchdog($: any) {
@@ -749,6 +806,7 @@ const ALIAS: Record<string, string> = { sleep: 'dormir', wake: 'despertar', out:
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     epoch = await $.clock.now()
+    await joinRegistry($)
     await update($, away, () => false) // al recargar, el de escritorio se cierra: Clawd está en casa
     await update($, near, () => false)
     await update($, dockAt, () => 0)
@@ -756,9 +814,19 @@ export const register: Register = on => {
     await $.command.register({ name: 'clawd', description: t('Clawd: dormir, despertar, fuera, casa, ocultar, mostrar o mini', 'Clawd: sleep, wake, out, home, hide, show or mini') })
     $.clock.after(1500, () => void greet($)) // saluda al empezar
     $.clock.every(5000, () => void watchdog($))
+    $.clock.every(SLOT_BEAT_MS, () => void slotBeat($))
     void ensurePet($) // compila (solo la primera vez tarda) y deja listo el Clawd de escritorio, escondido
     return next(e)
   })
+
+  on('session.end', async ($, e, next) => {
+    try {
+      if (regDir) await releaseSlot($, regDir, sid || sidTag, mySlot) // el hueco (y el color) queda libre al momento
+    } catch {
+      // no pasa nada: caduca solo
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   // Sin texto en la conversación (no gasta tokens): responde con un aviso flotante.
   on('command.run', { command: 'clawd' }, async ($, e) => {
@@ -908,7 +976,7 @@ export const register: Register = on => {
     askSeq += 1
     const id = askSeq
     const { exe, cmd } = petPaths($)
-    const answerFile = cmd.replace(/cmd\.txt$/, `answer-${id}.txt`)
+    const answerFile = cmd.replace(/cmd-[^/]*\.txt$/, `answer-${sidTag}-${id}.txt`)
     await tellPet($, `ask ${id} ${enc(shortTool(e.tool_name))} ${enc(askSummary(e.tool_input))} ${enc(answerFile)}`)
     // si el turno se cancela mientras espera, se deja de esperar (y se quita el aviso)
     pendingAnswers.add(answerFile)
@@ -963,7 +1031,7 @@ export const register: Register = on => {
     const elapsed = ((await $.clock.now()) - epoch) / 1000
     return (
       <Box flexDirection="row" alignItems="center" gap={1}>
-        <Svg source={miniOf(e.props.mode, (await read($, mood)) === 'web', elapsed)} alt="Clawd" width={22} height={18} />
+        <Svg source={miniOf(e.props.mode, (await read($, mood)) === 'web', elapsed, await read($, slotAtom))} alt="Clawd" width={22} height={18} />
         <Text dimColor>{words}</Text>
       </Box>
     )
@@ -1003,7 +1071,7 @@ export const register: Register = on => {
     if (e.surface === 'terminal') {
       const rows = Math.max(4, Math.min(TERMINAL_ROWS, Math.floor(e.props.maxRows) || TERMINAL_ROWS))
       const { Client } = $.ui.resolve(e)
-      return <Client key="clawd" module="./clawd-client.tsx" width="100%" height={rows} props={{ mood: m, label, rows }} />
+      return <Client key="clawd" module="./clawd-client.tsx" width="100%" height={rows} props={{ mood: m, label, rows, slot: await read($, slotAtom) }} />
     }
 
     // escritorio: SVG nítido y animado + capa transparente que recoge el ratón (también al pasar, para mirarte)
@@ -1014,7 +1082,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="row">
           <Box position="relative">
-            <Svg source={sceneOf(sc, m, label, wc, now)} alt={`Clawd${label ? ', ' + label : ''}`} width={wc} height={bh} />
+            <Svg source={sceneOf(sc, m, label, wc, now, await read($, slotAtom))} alt={`Clawd${label ? ', ' + label : ''}`} width={wc} height={bh} />
             <Box position="absolute" top={0} bottom={0} left={0} right={0} flexDirection="column">
               <Client key="clawd-input" module="./clawd-input.tsx" width="100%" flexGrow={1} props={{ wc, active: true, rows: inputRows }} />
             </Box>
@@ -1025,6 +1093,6 @@ export const register: Register = on => {
 
     // VS Code y móvil: SVG sin interacción
     const { Svg } = $.ui.resolve(e)
-    return <Svg source={sceneSvg(still('idle', 8, FLOOR, 0, 1, 1), m, label, 200)} alt="Clawd" width={200} height={HC} />
+    return <Svg source={tint(sceneSvg(still('idle', 8, FLOOR, 0, 1, 1), m, label, 200), await read($, slotAtom))} alt="Clawd" width={200} height={HC} />
   })
 }

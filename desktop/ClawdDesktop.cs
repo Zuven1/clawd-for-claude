@@ -63,8 +63,39 @@ static class Program
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += delegate { };
         AppDomain.CurrentDomain.UnhandledException += delegate { Environment.Exit(0); };
-        if (args.Length == 2 && args[0] == "--snap") { Pet.Snap(args[1]); return; }
-        Application.Run(new Pet(args.Length > 0 ? args[0] : null));
+        // argumentos: <archivo de órdenes> [hueco de la sesión (su color)] [carpeta del registro de sesiones]
+        if (args.Length >= 2 && args[0] == "--snap")
+        {
+            int sn = 0;
+            if (args.Length > 2) int.TryParse(args[2], out sn);
+            Pet.SetSlot(sn);
+            Pet.Snap(args[1]);
+            return;
+        }
+        string cmd = args.Length > 0 ? args[0] : null;
+        int slot = 0;
+        if (args.Length > 1) int.TryParse(args[1], out slot);
+        Pet.SetSlot(slot);
+        Pet.RegDir = args.Length > 2 && args[2].Length > 0 ? args[2] : null;
+        Cleanup(cmd);
+        Application.Run(new Pet(cmd));
+        try { if (cmd != null) File.Delete(cmd); } catch { } // su archivo de órdenes era solo de esta sesión
+        Pet.DropPeerFile();
+    }
+
+    /** Archivos de órdenes y respuestas de sesiones que se cerraron sin avisar: fuera los de más de dos días. */
+    static void Cleanup(string cmd)
+    {
+        try
+        {
+            if (cmd == null) return;
+            foreach (string f in Directory.GetFiles(Path.GetDirectoryName(cmd)))
+            {
+                string n = Path.GetFileName(f);
+                if ((n.StartsWith("cmd-") || n.StartsWith("answer-")) && n.EndsWith(".txt") && (DateTime.Now - File.GetLastWriteTime(f)).TotalDays > 2) File.Delete(f);
+            }
+        }
+        catch { }
     }
 
     /** Espera a que Clawd escriba la respuesta a un permiso (allow, deny, app) y la imprime; si no llega, "timeout". */
@@ -127,8 +158,28 @@ class Pet : Form
     // ── el sprite (14 x 11 píxeles, como en la banda) ────────────────────────
     const int GW = 14, GH = 11;
     const int MX = 16, MT = 21, MB = 2; // márgenes en píxeles del sprite: costados y encima (bocadillos), debajo
-    static readonly Color BODY = ColorTranslator.FromHtml("#D97757");
-    static readonly Color SHADE = ColorTranslator.FromHtml("#B85C3E");
+    static Color BODY = ColorTranslator.FromHtml("#D97757"); // el color de la sesión (cambia con SetSlot)
+    static Color SHADE = ColorTranslator.FromHtml("#B85C3E");
+    // el color de cada sesión, en el mismo orden que en la banda: naranja, azul, amarillo, blanco...
+    static readonly string[][] PAL = {
+        new[] { "#D97757", "#B85C3E" }, new[] { "#5B9BE6", "#3E72B8" }, new[] { "#E9C24B", "#BE9A2C" }, new[] { "#F1EFEA", "#C6C2BA" },
+        new[] { "#63C48F", "#3F9A6B" }, new[] { "#E88BB0", "#BC6489" }, new[] { "#A184DE", "#7B5EB8" }, new[] { "#4FC3C9", "#2F9AA0" } };
+    public static int Slot, RawSlot; // RawSlot: el número de hueco tal cual (Slot da la vuelta a los 8 colores)
+    // la interfaz (botón y borde de los bocadillos) usa un tono más oscuro del color de la sesión: el cuerpo blanco o amarillo no se leería
+    static readonly string[][] UI = {
+        new[] { "#D97757", "#B85C3E" }, new[] { "#4F86CC", "#3E72B8" }, new[] { "#C99A1F", "#A07A12" }, new[] { "#8A857C", "#6E6A62" },
+        new[] { "#3F9A6B", "#2F7A53" }, new[] { "#CC6C95", "#BC6489" }, new[] { "#8C6FD0", "#7B5EB8" }, new[] { "#2F9AA0", "#247A80" } };
+    static Color BTN = ColorTranslator.FromHtml("#D97757"), EDGE = ColorTranslator.FromHtml("#B85C3E");
+    public static string RegDir; // carpeta compartida entre sesiones (también para ver a los otros Clawd)
+    public static void SetSlot(int n)
+    {
+        RawSlot = n;
+        Slot = ((n % PAL.Length) + PAL.Length) % PAL.Length;
+        BODY = ColorTranslator.FromHtml(PAL[Slot][0]);
+        SHADE = ColorTranslator.FromHtml(PAL[Slot][1]);
+        BTN = ColorTranslator.FromHtml(UI[Slot][0]);
+        EDGE = ColorTranslator.FromHtml(UI[Slot][1]);
+    }
     static readonly Color DARK = ColorTranslator.FromHtml("#1f1a17");
     static readonly Color PINK = ColorTranslator.FromHtml("#ff8fb1");
     static readonly Color BLUE = ColorTranslator.FromHtml("#7db8ff");
@@ -155,7 +206,7 @@ class Pet : Form
     bool typeRemote; // el aviso de escritura viene de la app (no de su cajita)
     double sparkAt = -9; // cuándo se completó la última herramienta: estrellitas en el portátil
 
-    enum S { Hidden, Held, Fall, Land, Idle, Walk, Sit, Sleep, Wave, Petting, Dizzy, Climb, Cling, Hang, Peek, Announce, Work, Asking, Curious, Alert, Plane, Map, Music, Chase }
+    enum S { Hidden, Held, Fall, Land, Idle, Walk, Sit, Sleep, Wave, Petting, Dizzy, Climb, Cling, Hang, Peek, Announce, Work, Asking, Curious, Alert, Plane, Map, Music, Chase, Greet }
 
     // lo que hace Claude (llega con "mood")
     bool working, webMood, failMood;
@@ -347,6 +398,7 @@ class Pet : Form
             Go(S.Hidden);
         }
         else if (verb == "done") Announce();
+        else if (verb == "color") { SetSlot((int)Num(p, 2, 0)); Invalidate(); }
         else if (verb == "story")
         {
             // para pruebas: story plane|map|music|chase (hacia el lado con más sitio)
@@ -378,7 +430,7 @@ class Pet : Form
             thinkingMood = m == "thinking";
             if (st == S.Hidden) return;
             // se pone a trabajar donde esté (si está tranquilo); al acabar, vuelve a lo suyo
-            if (working && (st == S.Idle || st == S.Walk || st == S.Sit || st == S.Wave || st == S.Sleep || IsStory(st))) Go(S.Work);
+            if (working && (st == S.Idle || st == S.Walk || st == S.Sit || st == S.Wave || st == S.Sleep || Interruptible(st))) Go(S.Work);
             else if (working && (st == S.Climb || st == S.Cling || st == S.Hang)) { alertFrom = st; Go(S.Alert); }
             else if (!working && !failMood && st == S.Work) Go(S.Idle);
         }
@@ -649,11 +701,13 @@ class Pet : Form
 
     void Go(S s)
     {
+        if (st == S.Greet && s != S.Greet) { lastGreetEnd = EpochMs(); greetPartner = -1; } // acabó (o se cortó): descansa antes de otro saludo
         if (IsStory(st) && !IsStory(s)) HideProp(); // la historia se corta: fuera el avión o la mariposa
         if (s == S.Fall) thrown = st == S.Held; // ¿lo has soltado tú? (no: /clawd fuera, saltar de la pared...)
         st = s; stT = 0; holdFor = 0;
         if (s == S.Hidden)
         {
+            WritePeer(EpochMs(), false, false); // los demás Clawd ya no me ven
             frame.Stop(); Hide(); Location = new Point(-5000, -5000); SetNear(false);
             foreach (Ask a in asks) { try { File.WriteAllText(a.File, "app"); } catch { } }
             asks.Clear();
@@ -700,7 +754,7 @@ class Pet : Form
         if (t - duckCheckAt < 0.4) return;
         duckCheckAt = t;
         bool want = st != S.Hidden && st != S.Held && FullscreenAhead();
-        if (want && !ducked) { ducked = true; if (IsStory(st)) Go(S.Idle); Hide(); }
+        if (want && !ducked) { ducked = true; if (Interruptible(st)) Go(S.Idle); Hide(); }
         else if (!want && ducked)
         {
             ducked = false;
@@ -795,6 +849,7 @@ class Pet : Form
     void Step()
     {
         try { StepCore(); } catch (Exception ex) { Dbg(ex); }
+        try { PeerTick(); } catch (Exception ex) { Dbg(ex); }
         try { DuckForFullscreen(); } catch { }
         // tranquilo (sentado, trabajando, durmiendo...) basta con ~30 fps; moviéndose, ~60
         bool calm = st == S.Idle || st == S.Sit || st == S.Sleep || st == S.Work || st == S.Asking || st == S.Curious || st == S.Petting || st == S.Wave;
@@ -819,8 +874,8 @@ class Pet : Form
 
         bool boxOpen = box != null && !box.IsDisposed && box.Visible;
         bool remoteTyping = RemoteTyping();
-        if (boxOpen && (st == S.Idle || st == S.Sit || st == S.Work || st == S.Wave || st == S.Walk || st == S.Sleep || IsStory(st))) Go(S.Curious);
-        else if (remoteTyping && (st == S.Idle || st == S.Sit || st == S.Work || st == S.Wave || st == S.Sleep || IsStory(st))) ApproachBar();
+        if (boxOpen && (st == S.Idle || st == S.Sit || st == S.Work || st == S.Wave || st == S.Walk || st == S.Sleep || Interruptible(st))) Go(S.Curious);
+        else if (remoteTyping && (st == S.Idle || st == S.Sit || st == S.Work || st == S.Wave || st == S.Sleep || Interruptible(st))) ApproachBar();
         else if (remoteTyping && st == S.Curious && Math.Abs(typeTargetX - x) > 60 * P) ApproachBar(); // escribes más lejos: lo sigue
         else if (!boxOpen && !remoteTyping && st == S.Curious) Go(Calm());
 
@@ -976,6 +1031,20 @@ class Pet : Form
                     if (stT >= stay + sink) { Go(S.Hidden); return; }
                     break;
                 }
+            case S.Greet:
+                {
+                // anda hasta su sitio, saluda y choca con el otro; el guion va por la hora del sistema (los dos a la par)
+                double gt = (EpochMs() - greetT0) / 1000.0;
+                greetU = gt - (greetArr - 1.8);
+                double nx = GreetPos(gt), ddx = nx - x;
+                x = nx;
+                greetStep += Math.Abs(ddx) / P * 0.42;
+                greetV = Math.Abs(ddx) / Math.Max(0.001, dt) / P;
+                face = greetU > 6.0 ? -greetSide : greetSide;
+                y += (FloorAt(x, y) - y) * Math.Min(1, dt * 20);
+                if (greetU >= Story.GreetEnd) Go(S.Idle);
+                break;
+            }
             case S.Chase:
                 // Clawd se mueve con la simulación (ApplyStory); aquí solo se acaba la historia
                 y += (FloorAt(x, y) - y) * Math.Min(1, dt * 20);
@@ -1030,6 +1099,7 @@ class Pet : Form
         gy += (tgy - gy) * Math.Min(1, dt * 9);
         fs += (face - fs) * Math.Min(1, dt * 16);
         if (IsStory(st)) ApplyStory();
+        else if (st == S.Greet) ApplyGreet();
 
         Place();
         Invalidate();
@@ -1248,6 +1318,7 @@ class Pet : Form
         if (st == S.Music && musicF != null) PaintPhones(musicF);
         if (st == S.Chase && chaseF != null && chaseF.ExOp > 0.15) Glyph(X_CELLS, YELLOW, 1.5, 2.5, 7.7, -0.1, chaseF.ExS * Math.Min(1, chaseF.ExOp * 2));
         G.Restore(saved);
+        if (st == S.Greet) PaintSpark();
         if (st == S.Music)
         {
             // las notas suben desde un auricular, de lado a lado (fuera del giro del cuerpo)
@@ -1367,6 +1438,278 @@ class Pet : Form
         for (int i = 0; i < tc.Length; i++) SnapStory(p, S.Chase, tc[i], "Chase-" + i);
     }
 
+    // ── saludo entre Clawd de distintas sesiones ─────────────────────────────
+    //
+    // Cada Clawd de escritorio escribe a ~10 veces por segundo un archivito (pet-N.txt, N = su hueco) en la carpeta del
+    // registro con dónde está y si está libre, y lee los de los demás. Si dos se cruzan, el de hueco más bajo invita
+    // ("greet": con quién, cuándo, de qué tipo y dónde quedar), el otro acepta ("ack") y a la hora acordada los dos
+    // empiezan su mitad del saludo, cada uno con el reloj (los dos usan la hora del sistema, así van a la par). Si uno
+    // se va (le piden un permiso, lo agarras, se cierra...) el otro lo nota y deja de saludar al aire.
+
+    class Peer { public int Slot, GWith, GKind, GSide, AckWith; public double Ts, X, Y, GT0, GMid, GArr, AckT0, Ing; public bool Calm; }
+    readonly System.Collections.Generic.Dictionary<int, Peer> peers = new System.Collections.Generic.Dictionary<int, Peer>();
+    double lastPeerTick, lastGreetEnd = -1e12;
+    int peerFileSlot = -1;
+    // invito yo (req...), acepto yo (ackWith), y lo acordado que empieza a su hora (ps...)
+    int reqWith = -1, reqKind, reqSide; double reqT0, reqMid, reqArr;
+    int ackWith = -1; double ackT0;
+    bool ps; int psWith, psKind, psSide; double psT0, psMid, psArr;
+    // el saludo en marcha
+    int greetPartner = -1, greetKind, greetSide;
+    double greetT0, greetArr, greetX0, greetXT, greetU, greetV, greetStep;
+
+    static double EpochMs() { return (DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds; }
+    static string F0(double v) { return v.ToString("F0", CultureInfo.InvariantCulture); }
+    static string PeerPath(int slot) { return Path.Combine(RegDir, "pet-" + slot + ".txt"); }
+    static bool Interruptible(S s) { return IsStory(s) || s == S.Greet; }
+    static double GreetGap(int kind) { return kind == 0 ? 17.2 : 14; } // entre centros: los cuadraditos (o las manitas) justo se tocan
+
+    /** ¿Está libre para saludar? (no trabaja, no espera un permiso, no hace nada especial). */
+    bool GreetEligible()
+    {
+        if (st != S.Idle && st != S.Walk && st != S.Sit && st != S.Wave) return false;
+        return Calm() == S.Idle && asks.Count == 0 && !ducked && !(box != null && !box.IsDisposed && box.Visible);
+    }
+
+    void WritePeer(double now, bool vis, bool elig)
+    {
+        if (RegDir == null) return;
+        if (peerFileSlot >= 0 && peerFileSlot != RawSlot) { try { File.Delete(PeerPath(peerFileSlot)); } catch { } }
+        peerFileSlot = RawSlot;
+        StringBuilder sb = new StringBuilder();
+        sb.Append("ts=").Append(F0(now)).Append('\n');
+        sb.Append("vis=").Append(vis ? 1 : 0).Append('\n');
+        sb.Append("x=").Append(F0(x)).Append('\n');
+        sb.Append("y=").Append(F0(y)).Append('\n');
+        sb.Append("calm=").Append(elig ? 1 : 0).Append('\n');
+        sb.Append("ing=").Append(st == S.Greet ? F0(greetT0) : "0").Append('\n');
+        sb.Append("gwith=").Append(reqWith).Append('\n');
+        sb.Append("gt0=").Append(F0(reqT0)).Append('\n');
+        sb.Append("gkind=").Append(reqKind).Append('\n');
+        sb.Append("gside=").Append(reqSide).Append('\n');
+        sb.Append("gmid=").Append(F0(reqMid)).Append('\n');
+        sb.Append("garr=").Append(reqArr.ToString("F2", CultureInfo.InvariantCulture)).Append('\n');
+        sb.Append("ackwith=").Append(ackWith).Append('\n');
+        sb.Append("ackt0=").Append(F0(ackT0)).Append('\n');
+        sb.Append("end=1\n");
+        try { File.WriteAllText(PeerPath(RawSlot), sb.ToString()); } catch { }
+    }
+
+    public static void DropPeerFile()
+    {
+        try { if (RegDir != null) File.Delete(PeerPath(RawSlot)); } catch { }
+    }
+
+    static double PD(System.Collections.Generic.Dictionary<string, string> d, string k, double def)
+    {
+        string v;
+        double r;
+        return d.TryGetValue(k, out v) && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out r) ? r : def;
+    }
+
+    void ReadPeers(double now)
+    {
+        peers.Clear();
+        string[] files;
+        try { files = Directory.GetFiles(RegDir, "pet-*.txt"); } catch { return; }
+        foreach (string f in files)
+        {
+            try
+            {
+                string name = Path.GetFileNameWithoutExtension(f);
+                int slot;
+                if (!int.TryParse(name.Substring(4), out slot) || slot == RawSlot) continue;
+                System.Collections.Generic.Dictionary<string, string> d = new System.Collections.Generic.Dictionary<string, string>();
+                foreach (string line in File.ReadAllText(f).Split('\n'))
+                {
+                    int i = line.IndexOf('=');
+                    if (i > 0) d[line.Substring(0, i)] = line.Substring(i + 1).Trim();
+                }
+                if (!d.ContainsKey("end")) continue; // a medio escribir: en la próxima
+                Peer q = new Peer();
+                q.Slot = slot; q.Ts = PD(d, "ts", 0);
+                if (now - q.Ts > 1500 || PD(d, "vis", 0) < 1) continue; // cerrado, escondido o colgado
+                q.X = PD(d, "x", 0); q.Y = PD(d, "y", 0); q.Calm = PD(d, "calm", 0) > 0; q.Ing = PD(d, "ing", 0);
+                q.GWith = (int)PD(d, "gwith", -1); q.GT0 = PD(d, "gt0", 0); q.GKind = (int)PD(d, "gkind", 0); q.GSide = (int)PD(d, "gside", 1);
+                q.GMid = PD(d, "gmid", 0); q.GArr = PD(d, "garr", 1.8); q.AckWith = (int)PD(d, "ackwith", -1); q.AckT0 = PD(d, "ackt0", 0);
+                peers[slot] = q;
+            }
+            catch { }
+        }
+    }
+
+    /** Se llama en cada fotograma, pero solo trabaja ~10 veces por segundo. */
+    void PeerTick()
+    {
+        if (RegDir == null || snapping) return;
+        double now = EpochMs();
+        if (now - lastPeerTick < 100) return;
+        lastPeerTick = now;
+        bool vis = st != S.Hidden && !ducked;
+        bool elig = vis && GreetEligible();
+        // si dejo de estar libre, lo pendiente se cancela
+        if (!elig && st != S.Greet) { reqWith = -1; ackWith = -1; ps = false; }
+        WritePeer(now, vis, elig);
+        if (!vis) return;
+        ReadPeers(now);
+        Peer q;
+
+        if (st == S.Greet)
+        {
+            // el otro se fue (o ya no está saludando conmigo): no me quedo saludando al aire
+            if (!peers.TryGetValue(greetPartner, out q) || (now > greetT0 + 900 && Math.Abs(q.Ing - greetT0) > 1)) Go(S.Idle);
+            return;
+        }
+
+        // lo acordado empieza a su hora
+        if (ps)
+        {
+            if (!elig || !peers.ContainsKey(psWith)) { ps = false; ackWith = -1; return; }
+            if (now >= psT0) BeginGreet();
+            return;
+        }
+
+        // yo invité: ¿han aceptado?
+        if (reqWith >= 0)
+        {
+            if (peers.TryGetValue(reqWith, out q) && q.AckWith == RawSlot && Math.Abs(q.AckT0 - reqT0) < 1)
+            {
+                ps = true; psWith = reqWith; psT0 = reqT0; psKind = reqKind; psSide = reqSide; psMid = reqMid; psArr = reqArr;
+                reqWith = -1;
+            }
+            else if (now > reqT0 + 800) { reqWith = -1; lastGreetEnd = now - 35000; } // no contestó: lo reintenta en 10 s
+            return;
+        }
+
+        if (!elig) return;
+
+        // me invitan: acepto (si estoy libre y la invitación es reciente)
+        foreach (Peer p in peers.Values)
+        {
+            if (p.GWith == RawSlot && p.GT0 > now - 200 && p.GT0 < now + 2500)
+            {
+                ackWith = p.Slot; ackT0 = p.GT0;
+                ps = true; psWith = p.Slot; psT0 = p.GT0; psKind = p.GKind; psSide = -p.GSide; psMid = p.GMid; psArr = p.GArr;
+                return;
+            }
+        }
+
+        // ¿me cruzo con alguien libre? Invita el de hueco más bajo (si no, lo harían los dos a la vez)
+        if (now - lastGreetEnd < 45000) return;
+        foreach (Peer p in peers.Values)
+        {
+            if (!p.Calm || RawSlot > p.Slot || p.GWith >= 0 || p.AckWith >= 0) continue;
+            if (Math.Abs(p.Y - y) > 6 * P || Math.Abs(p.X - x) > 30 * P) continue;
+            Rectangle a = Area();
+            double half = (GW / 2.0 + 1) * P;
+            reqKind = rnd.Next(2);
+            double d = GreetGap(reqKind) * P;
+            reqSide = x <= p.X ? 1 : -1;
+            reqMid = Math.Max(a.Left + half + d / 2, Math.Min(a.Right - half - d / 2, (x + p.X) / 2));
+            double mine = reqMid - reqSide * d / 2, his = reqMid + reqSide * d / 2;
+            reqArr = Math.Max(0.9, Math.Min(3.2, Math.Max(Math.Abs(x - mine), Math.Abs(p.X - his)) / (7 * P)));
+            reqWith = p.Slot; reqT0 = now + 450;
+            return;
+        }
+    }
+
+    void BeginGreet()
+    {
+        ps = false; ackWith = -1;
+        greetPartner = psWith; greetT0 = psT0; greetKind = psKind; greetSide = psSide; greetArr = psArr;
+        greetX0 = x; greetXT = psMid - psSide * GreetGap(psKind) * P / 2;
+        greetStep = 0; greetU = 0; greetV = 0;
+        Go(S.Greet);
+    }
+
+    /** Dónde está (x de los pies) en el instante gt del saludo: anda hasta su sitio, y al final se aleja del otro. */
+    double GreetPos(double gt)
+    {
+        double u = gt - (greetArr - 1.8);
+        double nx = u <= 6.0
+            ? Story.Lerp(greetX0, greetXT, Story.Out(Story.Cl(gt / greetArr, 0, 1)))
+            : greetXT - greetSide * 10 * P * Story.Io(Story.Cl((u - 6.25) / 1.8, 0, 1));
+        Rectangle a = Area();
+        double half = (GW / 2.0 + 1) * P;
+        return Math.Max(a.Left + half, Math.Min(a.Right - half, nx));
+    }
+
+    void ApplyGreet()
+    {
+        spose = Story.Greet(greetU, greetKind, greetSide, greetV, greetStep);
+    }
+
+    static readonly int[][] CROSS = { new[] { 1, 1 }, new[] { 0, 1 }, new[] { 2, 1 }, new[] { 1, 0 }, new[] { 1, 2 } };
+
+    /** La chispita del choque, en el punto donde se tocan (los dos la pintan en el mismo sitio, cada uno en su ventana). */
+    void PaintSpark()
+    {
+        GraphicsState s3 = G.Save();
+        G.TranslateTransform(MX * P, MT * P);
+        G.ScaleTransform(P, P);
+        G.TranslateTransform(7, 0);
+        G.ScaleTransform((float)fs, 1);
+        G.TranslateTransform(-7, 0);
+        double fx = 7 + GreetGap(greetKind) / 2, fy = greetKind == 0 ? 5.4 : 0.2;
+        double[][] offs = { new[] { 0.0, 0.0 }, new[] { -1.8, -1.4 }, new[] { 1.9, -1.6 } };
+        for (int i = 0; i < 3; i++)
+        {
+            double a = (greetU - 3.9 - i * 0.09) / 0.55;
+            if (a < 0 || a > 1) continue;
+            double op = a > 0.7 ? (1 - a) / 0.3 : 1;
+            double sc = (0.3 + 1.1 * Math.Sin(Math.Min(1, a * 1.6) * Math.PI / 2) * (1 - a * 0.5)) * Math.Min(1, op * 2); // sin transparencia: se encoge
+            if (sc < 0.15) continue;
+            Glyph(CROSS, STAR, 1.5, 1.5, fx + offs[i][0], fy + offs[i][1] - a * 1.2, sc);
+        }
+        G.Restore(s3);
+    }
+
+    /** Prueba sin pantalla: los saludos en seis instantes, con los dos Clawd (naranja y azul) en un PNG. */
+    static void SnapGreet(string dir)
+    {
+        double[] times = { 0.8, 2.0, 2.8, 3.95, 5.5, 7.4 };
+        int keep = Slot;
+        for (int kind = 0; kind < 2; kind++)
+        {
+            for (int ti = 0; ti < times.Length; ti++)
+            {
+                double u = times[ti];
+                using (Bitmap o = new Bitmap(1000, 320))
+                using (Graphics og = Graphics.FromImage(o))
+                {
+                    og.Clear(Color.FromArgb(60, 60, 58));
+                    for (int side = 1; side >= -1; side -= 2)
+                    {
+                        SetSlot(side > 0 ? 0 : 1); // el color de cada uno (se pinta con el de este instante)
+                        Pet p = new Pet(null);
+                        p.snapping = true;
+                        double mid = 500;
+                        p.greetKind = kind; p.greetSide = side; p.greetArr = 1.8;
+                        p.greetX0 = mid - side * 21 * p.P; p.greetXT = mid - side * GreetGap(kind) * p.P / 2;
+                        p.y = 250;
+                        double st0 = 0, prev = p.GreetPos(0);
+                        for (double q = 0.01; q <= u; q += 0.01) { double c = p.GreetPos(q); st0 += Math.Abs(c - prev) / p.P * 0.42; prev = c; }
+                        p.x = p.GreetPos(u);
+                        p.greetV = Math.Abs(p.GreetPos(u + 0.02) - p.x) / 0.02 / p.P;
+                        p.greetStep = st0; p.greetU = u;
+                        p.st = S.Greet;
+                        p.face = u > 6.0 ? -side : side; p.fs = p.face;
+                        p.ApplyGreet();
+                        using (Bitmap b = new Bitmap(p.ClientSize.Width, p.ClientSize.Height))
+                        using (Graphics g = Graphics.FromImage(b))
+                        {
+                            p.PaintCore(new PaintEventArgs(g, new Rectangle(Point.Empty, b.Size)));
+                            b.MakeTransparent(KEY);
+                            og.DrawImage(b, (int)Math.Round(p.x) - (MX + 7) * p.P, (int)Math.Round(p.y) - (MT + 11) * p.P);
+                        }
+                    }
+                    o.Save(Path.Combine(dir, "Greet-" + kind + "-" + ti + ".png"));
+                }
+            }
+        }
+        SetSlot(keep);
+    }
+
     /** Prueba sin pantalla: pinta cada estado en un PNG (fondo gris) y termina. */
     public static void Snap(string dir)
     {
@@ -1381,6 +1724,7 @@ class Pet : Form
         SnapOne(p, S.Idle, dir, "Usage");
         p.askLong = true; SnapOne(p, S.Asking, dir, "Asking-largo"); p.askLong = false;
         SnapStories(dir);
+        SnapGreet(dir);
     }
 
     static void SnapOne(Pet p, S s, string dir, string name)
@@ -1501,7 +1845,7 @@ class Pet : Form
         G.SmoothingMode = SmoothingMode.None;
         G.PixelOffsetMode = PixelOffsetMode.Half;
         G.InterpolationMode = InterpolationMode.NearestNeighbor;
-        if (IsStory(st)) { PaintStory(); return; }
+        if (IsStory(st) || st == S.Greet) { PaintStory(); return; }
         double t = clock.Elapsed.TotalSeconds;
         bool climbing = st == S.Climb || st == S.Cling || (st == S.Alert && alertFrom != S.Hang);
         bool hanging = st == S.Hang || (st == S.Alert && alertFrom == S.Hang);
@@ -1768,14 +2112,14 @@ class Pet : Form
         using (SolidBrush ink = new SolidBrush(DARK))
         using (SolidBrush muted = new SolidBrush(MUTED))
         using (SolidBrush white = new SolidBrush(WHITE))
-        using (SolidBrush orange = new SolidBrush(BODY))
+        using (SolidBrush orange = new SolidBrush(BTN))
         using (SolidBrush paper = new SolidBrush(PAPER))
-        using (SolidBrush edge = new SolidBrush(SHADE))
+        using (SolidBrush edge = new SolidBrush(EDGE))
         {
             float lh1 = G.MeasureString("Ag", title).Height, lh2 = G.MeasureString("Ag", body).Height, bh = 3.2f * P;
             float hgt = 0.8f * P + lh1 + lh2 + 0.8f * P + bh + 0.9f * P;
             RectangleF box = new RectangleF(cx - w / 2, (MT - 1.2f) * P - hgt, w, hgt);
-            Card(box, PAPER, SHADE, true);
+            Card(box, PAPER, EDGE, true);
             float yy = box.Y + 0.6f * P;
             G.DrawString(Fit(L.T("Claude quiere usar ", "Claude wants to use ") + a.Tool, title, w - 2 * P), title, ink, box.X + P, yy);
             yy += lh1;
@@ -1814,7 +2158,7 @@ class Pet : Form
             float w = Math.Max(a.Width, b.Width) + 2.4f * P, h = a.Height + b.Height + 1.2f * P;
             float cx = (MX + 7) * P, top = (MT - 2.2f) * P - h;
             RectangleF box = new RectangleF(cx - w / 2, top, w, h);
-            Card(box, PAPER, SHADE, true);
+            Card(box, PAPER, EDGE, true);
             G.DrawString(l1, f, ink, cx - a.Width / 2, top + 0.6f * P);
             G.DrawString(l2, f, ink, cx - b.Width / 2, top + 0.6f * P + a.Height);
         }
@@ -2057,6 +2401,65 @@ static class Story
         sc = 0.55 + 0.45 * EOut(Math.Min(1, a * 4));
         op = a < 0.12 ? a / 0.12 : a > 0.55 ? (1 - a) / 0.45 : 1;
         return true;
+    }
+
+    // ── 5 · saludo entre dos Clawd (cada uno hace su mitad; `u` es el tiempo del guion, con la llegada en 1,8 s) ──
+    public const double GreetEnd = 8.2; // cuándo acaba el guion
+    public static double Out(double k) { return EOut(k); }
+    public static double Io(double k) { return EIo(k); }
+    static readonly double[][] GEnv = { K2(3.2, 0), K2(3.9, 1), K2(4.5, 1), K2(5.0, 0) };
+    static readonly double[][] GExt = { K2(3.3, 0), K3(3.9, 1, 1), K2(4.5, 1), K2(5.0, 0) };
+    static readonly double[][] GUp = { K2(3.2, 0), K3(3.75, 1, 1), K2(4.5, 1), K2(5.0, 0) };
+    /** Tipo 0: choque de puños (los cuadraditos se tocan); tipo 1: choca esos cinco (las manitas arriba, por el lado). */
+    public static StoryPose Greet(double u, int kind, int side, double v, double step)
+    {
+        StoryPose p = Base(u);
+        p.Blink = BlinkAt(u + side * 1.7);
+        double sw = Math.Sin(step * Math.PI * 2);
+        if (v > 1.2)
+        {
+            for (int i = 0; i < 4; i++) p.Legs[i] = 1.65 + 0.35 * Math.Sin(step * Math.PI * 2 + (i % 2) * Math.PI);
+            p.AL[0] = 5 + sw; p.AL[1] = 2; p.AR[0] = 5 - sw; p.AR[1] = 2;
+            p.Dy = -Math.Abs(sw) * 0.35;
+        }
+        // se ven: un respingo; y, tras chocar, un saltito de alegría
+        double hop1 = Win(u, 1.85, 2.25) ? Math.Sin((u - 1.85) / 0.4 * Math.PI) : 0;
+        double hop2 = Win(u, 5.2, 5.9) ? Math.Sin((u - 5.2) / 0.7 * Math.PI) : 0;
+        double hop = hop1 * 1.2 + hop2 * 2.2;
+        p.Dy -= hop;
+        if (hop > 0) p.Legs = new double[] { 1, 1, 1, 1 };
+        if (Win(u, 1.8, 2.4)) p.Eh = 3.6;
+        if (Win(u, 1.0, 6.0)) { p.Gx = 0.7; p.Gy = 0; } // se miran el uno al otro
+        // saludo con la manita
+        if (Win(u, 2.3, 3.3)) { p.AR[0] = 1.5 - 0.9 * Math.Abs(Math.Sin((u - 2.3) * 9)); p.AR[1] = 3.5; p.Happy = true; p.Gx = 0; }
+        double env = Kf(u, GEnv);
+        if (kind == 0)
+        {
+            double ext = Kf(u, GExt);
+            if (u >= 3.3 && u <= 5.0)
+            {
+                bool lifting = Win(u, 3.3, 3.45);
+                p.AR[0] = Lerp(lifting ? 1.5 : 5.2, 4.4, ext);
+                p.AR[1] = Lerp(lifting ? 3.5 : 2, 2, ext);
+                p.ArW = Lerp(2, 3.6, ext);
+                if (u > 3.45) p.AR[0] = Lerp(5.2, 4.4, ext);
+            }
+        }
+        else
+        {
+            double up = Kf(u, GUp);
+            if (u >= 3.2 && u <= 5.0) { p.AR[0] = Lerp(Win(u, 3.2, 3.3) ? 1.5 : 5.2, 0.7, up); p.AR[1] = Lerp(2, 3.7, up); }
+        }
+        // se inclinan un poco el uno hacia el otro y se aplastan al chocar
+        if (u >= 3.3 && u <= 5.0) p.Rot = 4 * env;
+        if (Win(u, 3.9, 4.1)) { double k = Math.Sin((u - 3.9) / 0.2 * Math.PI); p.Sx = 1 + 0.06 * k; p.Sy = 1 - 0.08 * k; }
+        if (Win(u, 5.0, 6.0))
+        {
+            p.Happy = true; p.Gx = 0;
+            if (Win(u, 5.2, 5.9)) { p.AL[0] = 1.5; p.AL[1] = 3.5; p.AR[0] = 1.5; p.AR[1] = 3.5; }
+        }
+        if (u > 6.0) p.Gx = 0;
+        return p;
     }
 
     // ── 4 · mariposa ──

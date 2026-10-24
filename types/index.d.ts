@@ -41,6 +41,7 @@ declare module 'claude-code' {
       dockAt: number // cuándo se bajó (o se subió) la persiana de la banda: sus animaciones siguen desde ahí
       bandH: number // alto visible de la banda (px): se minimiza mientras Clawd está fuera
       near: boolean // lo tienes encima de la barra de escribir: la banda se abre para recibirlo
+      slot: number // el hueco de esta sesión (0 naranja, 1 azul, 2 amarillo...): el color de su Clawd
     }
   }
 }

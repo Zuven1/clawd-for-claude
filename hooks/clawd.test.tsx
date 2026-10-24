@@ -778,3 +778,116 @@ test('historias: un cambio de ánimo (Claude se pone a pensar) corta la historia
   const p = nextScene({ mood: 'thinking', typing: false, prev, now: 3000, wc: 720, rnd, idleMs: 0 })
   expect(['map', 'plane', 'music']).not.toContain(p.scene.kind)
 })
+
+// ── varias sesiones: colores y registro ──
+import { beatSlot, claimSlot, releaseSlot, readClaim, SLOT_STALE_MS } from './slots'
+import { PALETTES, paletteOf, tint } from './scene'
+
+// un "$" falso con archivos en memoria y un reloj a mano: lo justo para probar el registro
+function fakeEnv() {
+  const files = new Map<string, string>()
+  let now = 1_000_000
+  const $ = {
+    clock: { now: async () => now, sleep: async () => undefined },
+    fs: {
+      read: async (p: string) => {
+        const v = files.get(p)
+        if (v === undefined) throw new Error('no existe')
+        return v
+      },
+      write: async (p: string, t: string) => void files.set(p, t),
+    },
+  }
+  return { $, files, tick: (ms: number) => void (now += ms) }
+}
+const DIR = '/reg'
+
+test('colores: la primera sesión es naranja (la de siempre), luego azul, amarilla, blanca...', async () => {
+  expect(paletteOf(0).name).toBe('naranja')
+  expect(paletteOf(1).name).toBe('azul')
+  expect(paletteOf(2).name).toBe('amarillo')
+  expect(paletteOf(3).name).toBe('blanco')
+  expect(paletteOf(PALETTES.length).name).toBe('naranja') // si hay más sesiones que colores, se repiten
+  expect(PALETTES.length).toBeGreaterThanOrEqual(6)
+  expect(new Set(PALETTES.map(p => p.body)).size).toBe(PALETTES.length) // ninguno repetido
+})
+
+test('colores: el dibujo de la sesión naranja no cambia; el de otra cambia cuerpo y sombra', async () => {
+  const svg = sceneSvg(still('idle', 100, FLOOR, 0, 1, 1), 'idle', '', 400, 0)
+  expect(tint(svg, 0)).toBe(svg)
+  const blue = tint(svg, 1)
+  expect(blue).not.toContain('#D97757')
+  expect(blue).not.toContain('#B85C3E')
+  expect(blue).toContain(paletteOf(1).body)
+  expect(blue).toContain(paletteOf(1).shade)
+  expect(blue.length).toBe(svg.length) // solo cambian colores
+})
+
+test('registro: cada sesión toma el hueco libre más bajo y lo libera al irse', async () => {
+  const { $ } = fakeEnv()
+  expect(await claimSlot($, DIR, 'A')).toBe(0)
+  expect(await claimSlot($, DIR, 'B')).toBe(1)
+  expect(await claimSlot($, DIR, 'C')).toBe(2)
+  await releaseSlot($, DIR, 'A', 0) // se cierra la primera...
+  expect(await claimSlot($, DIR, 'D')).toBe(0) // ...y la siguiente que se abre vuelve a ser naranja
+  expect((await readClaim($, DIR, 1))?.sid).toBe('B') // las demás siguen como estaban
+})
+
+test('registro: al recargar el mod la sesión conserva su hueco (no cambia de color)', async () => {
+  const { $ } = fakeEnv()
+  await claimSlot($, DIR, 'A')
+  expect(await claimSlot($, DIR, 'B')).toBe(1)
+  await releaseSlot($, DIR, 'A', 0) // el 0 queda libre, pero B ya tenía el 1
+  expect(await claimSlot($, DIR, 'B')).toBe(1)
+})
+
+test('registro: un hueco abandonado (sesión caída, sin renovar) caduca y otra sesión lo toma', async () => {
+  const { $, tick } = fakeEnv()
+  await claimSlot($, DIR, 'A')
+  tick(SLOT_STALE_MS - 1000)
+  expect(await claimSlot($, DIR, 'B')).toBe(1) // A aún vive
+  tick(2000)
+  expect(await claimSlot($, DIR, 'C')).toBe(0) // A dejó de renovar: su hueco caducó
+})
+
+test('registro: si dos sesiones se pisan en el mismo hueco, la que lo pierde pasa a otro en el latido', async () => {
+  const { $, files } = fakeEnv()
+  expect(await claimSlot($, DIR, 'A')).toBe(0)
+  files.set(`${DIR}/slot-0.json`, JSON.stringify({ sid: 'B', ts: 1_000_000 })) // B escribió justo después
+  expect(await beatSlot($, DIR, 'A', 0)).toBe(1) // A se entera y se pasa al siguiente libre
+  expect(await beatSlot($, DIR, 'B', 0)).toBe(0) // B se queda con el suyo
+})
+
+test('varias sesiones: la sesión reserva su hueco y habla con su Clawd de escritorio por archivos propios', async ($, on) => {
+  const paths: string[] = []
+  on('env.get', () => ({ value: 'C:/Users/prueba' }) as never) // el inicio del usuario: ahí va el registro
+  on('session.id', () => ({ value: 'abc-123-def' }) as never)
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: undefined }) as never)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on('fs.write', (_: unknown, e: any) => {
+    paths.push(String(e.path))
+    return { value: undefined }
+  })
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 5, isLink: false } }) as never)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on('process.spawn', async function* (): any {
+    yield { stream: 'stdout', text: 'ready\n' }
+    await new Promise(() => undefined)
+  })
+  const clock = mock.clock(on, { now: 1000 })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await clock.settle()
+  const G = { cols: 97, rows: 6, wc: 776 }
+  await ui.post({ k: 'geo', ...G }, IN)
+  await ui.post({ k: 'ptr', type: 'down', x: 17, y: 5, ...G, b: 'left' }, IN)
+  await ui.post({ k: 'ptr', type: 'move', x: 17, y: -4, ...G, b: 'left' }, IN) // lo saca: le habla al de escritorio
+  await clock.advance(400)
+  const norm = (p: string) => p.split(String.fromCharCode(92)).join('/') // barras de Windows
+  expect(paths.some(p => /clawd-band\/slot-\d+\.json$/.test(norm(p)))).toBe(true) // su hueco en el registro
+  const cmd = paths.filter(p => /\/cmd[^/]*\.txt$/.test(norm(p)))
+  expect(cmd.length).toBeGreaterThan(0)
+  for (const p of cmd) expect(/cmd-[A-Za-z0-9]+\.txt$/.test(p)).toBe(true) // nunca el cmd.txt compartido de antes
+  await ui.unmount()
+})

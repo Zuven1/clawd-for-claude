@@ -849,3 +849,28 @@ export function worldWidth(cellPx: number, bodyColumns: number): number {
   if (!(cellPx > 0) || !(bodyColumns > 2)) return 240
   return clamp(Math.floor((bodyColumns - 1) * cellPx), 240, 1500)
 }
+
+// ── colores: un Clawd distinto por sesión ───────────────────────────────────
+
+export type Palette = { name: string; body: string; shade: string }
+
+/** El primero (naranja) es el de siempre; la segunda sesión abierta es azul, la tercera amarilla, la cuarta blanca... */
+export const PALETTES: Palette[] = [
+  { name: 'naranja', body: C.body, shade: C.shade },
+  { name: 'azul', body: '#5B9BE6', shade: '#3E72B8' },
+  { name: 'amarillo', body: '#E9C24B', shade: '#BE9A2C' },
+  { name: 'blanco', body: '#F1EFEA', shade: '#C6C2BA' },
+  { name: 'verde', body: '#63C48F', shade: '#3F9A6B' },
+  { name: 'rosa', body: '#E88BB0', shade: '#BC6489' },
+  { name: 'morado', body: '#A184DE', shade: '#7B5EB8' },
+  { name: 'turquesa', body: '#4FC3C9', shade: '#2F9AA0' },
+]
+
+export const paletteOf = (slot: number): Palette => PALETTES[((Math.floor(slot) % PALETTES.length) + PALETTES.length) % PALETTES.length]
+
+/** Tiñe un dibujo de Clawd con el color de su sesión (el naranja de siempre se cambia por el suyo). */
+export function tint(svg: string, slot: number): string {
+  const p = paletteOf(slot)
+  if (p.body === C.body) return svg
+  return svg.split(C.body).join(p.body).split(C.shade).join(p.shade)
+}
